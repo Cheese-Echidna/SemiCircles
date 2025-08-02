@@ -1,3 +1,5 @@
+mod easings;
+
 use nannou::prelude::*;
 use nannou::rand;
 use nannou::winit::event::VirtualKeyCode;
@@ -5,16 +7,18 @@ use palette::{IntoColor, Okhsl};
 use rand_derive2::RandGen;
 use std::f32::consts::FRAC_PI_2;
 use std::time::Duration;
-use nannou::draw::background::new;
+use nannou::rand::prelude::SliceRandom;
+use nannou::rand::thread_rng;
+use crate::easings::{ease_in_out_elastic, ease_out_elastic};
 
 fn main() {
     nannou::app(model).update(update).fullscreen().run();
 }
 
 // TODO:
-//  - Add rotations
-//  - Expand grid to fill screen (ideally line up with the palette colours) (will need to fix bounds check for movement)
-//  - Fix random movement (currently too variable)
+//  - Maybe swap palette every 60 seconds
+//  - Maybe have SC return to origin after some time?
+
 
 fn random_orientation() -> f32 {
     random_range(0_u8, 4) as f32 / 4.0 * TAU
@@ -59,7 +63,8 @@ struct GridInfo {
     wh: Vec2,
     tile_size: f32,
     num_tiles: Vec2,
-    slide_time: f32,
+    transition_duration: f32,
+    transition_delay: f32,
 }
 
 impl GridInfo {
@@ -119,8 +124,8 @@ impl SemiCircle {
     fn get_pos(&self, grid: &GridInfo, since_start: Duration) -> Vec2 {
         let p = if let Some((Transition::Translation(p2), d)) = self.transition {
             let p1 = self.pos;
-            let t = ((since_start.abs_diff(d)).as_secs_f32() / grid.slide_time).clamp(0.0, 1.0);
-            p1.lerp(p2, ease(t))
+            let t = ((since_start.abs_diff(d)).as_secs_f32() / grid.transition_duration).clamp(0.0, 1.0);
+            p1.lerp(p2, ease_out_elastic(t))
         } else {
             self.pos
         };
@@ -134,8 +139,8 @@ impl SemiCircle {
     fn get_orientation(&self, grid: &GridInfo, since_start: Duration) -> f32 {
         if let Some((Transition::Rotation(o2), d)) = self.transition {
             let o1 = self.orientation;
-            let t = ((since_start.abs_diff(d)).as_secs_f32() / grid.slide_time).clamp(0.0, 1.0);
-            lerp(o1, o2, ease(t))
+            let t = ((since_start.abs_diff(d)).as_secs_f32() / grid.transition_duration).clamp(0.0, 1.0);
+            lerp(o1, o2, ease_in_out_elastic(t))
         } else {
             self.orientation
         }
@@ -161,7 +166,8 @@ impl GridInfo {
             wh,
             tile_size,
             num_tiles,
-            slide_time: 2.0,
+            transition_duration: 3.0,
+            transition_delay: 1.0
         }
     }
 }
@@ -173,71 +179,25 @@ fn new_objects(grid: &GridInfo, palette_len: usize) -> Vec<SemiCircle> {
     for x in 0..(grid.num_tiles.x as i32) {
         for y in 0..(grid.num_tiles.y as i32) {
             for _ in 0..2 {
-                objects.push(SemiCircle {
-                    transition: None,
-                    pos: Vec2::new(x as f32, y as f32),
-                    orientation: random_orientation(),
-                    semi_circle_type: SemiCircleType::generate_random(),
-                    colour: random_range(0, palette_len),
-                })
+                // if random_f32() > 0.25 {
+                    objects.push(SemiCircle {
+                        transition: None,
+                        pos: Vec2::new(x as f32, y as f32),
+                        orientation: random_orientation(),
+                        semi_circle_type: SemiCircleType::generate_random(),
+                        colour: (x / 2) as usize,
+                    })
+                // }
             }
         }
     }
 
+    objects.shuffle(&mut thread_rng());
+
     objects
 }
 
-fn ease(x: f32) -> f32 {
-    ease_in_out_elastic(x)
-}
 
-pub fn ease_in_out_elastic(x: f32) -> f32 {
-    let c5 = (2.0 * PI) / 4.5;
-
-    if x == 0.0 {
-        0.0
-    } else if x == 1.0 {
-        1.0
-    } else if x < 0.5 {
-        -((2.0f32).powf(20.0 * x - 10.0) * ((20.0 * x - 11.125) * c5).sin()) / 2.0
-    } else {
-        ((2.0f32).powf(-20.0 * x + 10.0) * ((20.0 * x - 11.125) * c5).sin()) / 2.0 + 1.0
-    }
-}
-
-fn ease_out_circ(x: f32) -> f32 {
-    (1.0 - (x - 1.0).powi(2)).sqrt()
-}
-
-pub fn ease_out_bounce(mut x: f32) -> f32 {
-    const N1: f32 = 7.5625;
-    const D1: f32 = 2.75;
-
-    if x < 1.0 / D1 {
-        N1 * x * x
-    } else if x < 2.0 / D1 {
-        x -= 1.5 / D1;
-        N1 * x * x + 0.75
-    } else if x < 2.5 / D1 {
-        x -= 2.25 / D1;
-        N1 * x * x + 0.9375
-    } else {
-        x -= 2.625 / D1;
-        N1 * x * x + 0.984375
-    }
-}
-
-pub fn ease_in_bounce(x: f32) -> f32 {
-    1.0 - ease_out_bounce(1.0 - x)
-}
-
-pub fn ease_in_out_bounce(x: f32) -> f32 {
-    if x < 0.5 {
-        (1.0 - ease_out_bounce(1.0 - 2.0 * x)) * 0.5
-    } else {
-        (1.0 + ease_out_bounce(2.0 * x - 1.0)) * 0.5
-    }
-}
 
 fn model(app: &App) -> Model {
     let window_id = app
@@ -267,6 +227,7 @@ fn model(app: &App) -> Model {
 fn view(app: &App, model: &Model, frame: Frame) {
     let draw = app.draw();
     draw_palette_bg(app, model, &draw);
+    // frame.clear(LIGHTYELLOW);
 
     for semi in model.objects.iter() {
         semi.draw(&draw, &model.palette, &model.grid, app.duration.since_start);
@@ -305,16 +266,15 @@ fn event(_app: &App, model: &mut Model, event: WindowEvent) {
 }
 
 fn update(_app: &App, model: &mut Model, update: Update) {
-    let slide_time = model.grid.slide_time;
     for object in model.objects.iter_mut() {
         if let Some((transition, start)) = &object.transition.clone() {
-            if start.abs_diff(update.since_start).as_secs_f32() > slide_time * 1.2 {
+            if start.abs_diff(update.since_start).as_secs_f32() > model.grid.transition_duration * 1.2 {
                 transition.finalise(object);
             }
         }
     }
 
-    if model.last_anim.abs_diff(update.since_start).as_secs_f32() > slide_time {
+    if model.last_anim.abs_diff(update.since_start).as_secs_f32() > model.grid.transition_delay {
         trigger(model, update);
         model.last_anim = update.since_start;
     }
@@ -357,7 +317,7 @@ fn palette() -> [LinSrgb; 8] {
     // let max_range = lerp(0.65, 1.0, random());
 
     let min_range = 0.3;
-    let max_range = 1.0;
+    let max_range = 0.7;
 
     let max = 8;
 
