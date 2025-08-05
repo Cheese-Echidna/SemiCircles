@@ -1,15 +1,16 @@
-mod easings;
+mod easing;
 
+use crate::easing::{ease_in_out_elastic, ease_out_elastic};
 use nannou::prelude::*;
 use nannou::rand;
+use nannou::rand::prelude::SliceRandom;
+use nannou::rand::thread_rng;
 use nannou::winit::event::VirtualKeyCode;
 use palette::{IntoColor, Okhsl};
 use rand_derive2::RandGen;
 use std::f32::consts::FRAC_PI_2;
-use std::time::Duration;
-use nannou::rand::prelude::SliceRandom;
-use nannou::rand::thread_rng;
-use crate::easings::{ease_in_out_elastic, ease_out_elastic};
+
+const PALETTE_LEN: usize = 8;
 
 fn main() {
     nannou::app(model).update(update).fullscreen().run();
@@ -19,7 +20,6 @@ fn main() {
 //  - Maybe swap palette every 60 seconds
 //  - Maybe have SC return to origin after some time?
 
-
 fn random_orientation() -> f32 {
     random_range(0_u8, 4) as f32 / 4.0 * TAU
 }
@@ -27,7 +27,6 @@ fn random_orientation() -> f32 {
 fn random_direction() -> Vec2 {
     [-Vec2::X, Vec2::X, Vec2::Y, -Vec2::Y][random_range(0, 4)]
 }
-
 
 #[derive(Copy, Clone, Debug)]
 enum Transition {
@@ -38,8 +37,8 @@ enum Transition {
 impl Transition {
     pub(crate) fn finalise(self, object: &mut SemiCircle) {
         match self {
-            Transition::Rotation(r2) => { object.orientation = r2}
-            Transition::Translation(p2) => { object.pos = p2}
+            Transition::Rotation(r2) => object.orientation = r2,
+            Transition::Translation(p2) => object.pos = p2,
         }
         object.transition = None;
     }
@@ -51,12 +50,16 @@ enum SemiCircleType {
     Striped,
 }
 
+type Palette = [LinSrgb; PALETTE_LEN];
+
 struct Model {
     _window: WindowId,
-    palette: [LinSrgb; 8],
+    palette: Palette,
     grid: GridInfo,
     objects: Vec<SemiCircle>,
-    last_anim: Duration,
+    last_anim_time: f32,
+    last_p_swap_time: f32,
+    new_palette: Palette,
 }
 
 struct GridInfo {
@@ -69,12 +72,15 @@ struct GridInfo {
 
 impl GridInfo {
     fn contains(&self, point: Vec2) -> bool {
-        !(point.x >= self.num_tiles.x || point.x < 0.0 || point.y >= self.num_tiles.y || point.y < 0.0)
+        !(point.x >= self.num_tiles.x
+            || point.x < 0.0
+            || point.y >= self.num_tiles.y
+            || point.y < 0.0)
     }
 }
 
 struct SemiCircle {
-    transition: Option<(Transition, Duration)>,
+    transition: Option<(Transition, f32)>,
     pos: Vec2,
     orientation: f32,
     semi_circle_type: SemiCircleType,
@@ -82,7 +88,7 @@ struct SemiCircle {
 }
 
 impl SemiCircle {
-    fn draw(&self, draw: &Draw, colours: &[LinSrgb], grid_info: &GridInfo, since_start: Duration) {
+    fn draw(&self, draw: &Draw, colours: &[LinSrgb], grid_info: &GridInfo, since_start: f32) {
         let centre = self.get_pos(grid_info, since_start);
         let radius = grid_info.tile_size / 2.0;
         let orientation = self.get_orientation(grid_info, since_start);
@@ -120,11 +126,11 @@ impl SemiCircle {
         }
     }
 
-
-    fn get_pos(&self, grid: &GridInfo, since_start: Duration) -> Vec2 {
+    fn get_pos(&self, grid: &GridInfo, since_start: f32) -> Vec2 {
         let p = if let Some((Transition::Translation(p2), d)) = self.transition {
             let p1 = self.pos;
-            let t = ((since_start.abs_diff(d)).as_secs_f32() / grid.transition_duration).clamp(0.0, 1.0);
+            let t = ((since_start - d) / grid.transition_duration)
+                .clamp(0.0, 1.0);
             p1.lerp(p2, ease_out_elastic(t))
         } else {
             self.pos
@@ -136,10 +142,11 @@ impl SemiCircle {
         bottom_left + offset + tile
     }
 
-    fn get_orientation(&self, grid: &GridInfo, since_start: Duration) -> f32 {
+    fn get_orientation(&self, grid: &GridInfo, since_start: f32) -> f32 {
         if let Some((Transition::Rotation(o2), d)) = self.transition {
             let o1 = self.orientation;
-            let t = ((since_start.abs_diff(d)).as_secs_f32() / grid.transition_duration).clamp(0.0, 1.0);
+            let t = ((since_start - d) / grid.transition_duration)
+                .clamp(0.0, 1.0);
             lerp(o1, o2, ease_in_out_elastic(t))
         } else {
             self.orientation
@@ -154,7 +161,7 @@ impl GridInfo {
         let num_tiles_wide_u = 16_i32;
         let num_tiles_wide = num_tiles_wide_u as f32;
 
-        let tile_size= width / num_tiles_wide;
+        let tile_size = width / num_tiles_wide;
 
         let num_tiles_tall = (height / tile_size).floor();
         let height = num_tiles_tall * tile_size;
@@ -167,11 +174,10 @@ impl GridInfo {
             tile_size,
             num_tiles,
             transition_duration: 3.0,
-            transition_delay: 1.0
+            transition_delay: 1.0,
         }
     }
 }
-
 
 fn new_objects(grid: &GridInfo, palette_len: usize) -> Vec<SemiCircle> {
     let mut objects = vec![];
@@ -180,13 +186,14 @@ fn new_objects(grid: &GridInfo, palette_len: usize) -> Vec<SemiCircle> {
         for y in 0..(grid.num_tiles.y as i32) {
             for _ in 0..2 {
                 // if random_f32() > 0.25 {
-                    objects.push(SemiCircle {
-                        transition: None,
-                        pos: Vec2::new(x as f32, y as f32),
-                        orientation: random_orientation(),
-                        semi_circle_type: SemiCircleType::generate_random(),
-                        colour: (x / 2) as usize,
-                    })
+                objects.push(SemiCircle {
+                    transition: None,
+                    pos: Vec2::new(x as f32, y as f32),
+                    orientation: random_orientation(),
+                    semi_circle_type: SemiCircleType::generate_random(),
+                    // colour: (x / 2) as usize,
+                    colour: random_range(0, palette_len),
+                })
                 // }
             }
         }
@@ -196,8 +203,6 @@ fn new_objects(grid: &GridInfo, palette_len: usize) -> Vec<SemiCircle> {
 
     objects
 }
-
-
 
 fn model(app: &App) -> Model {
     let window_id = app
@@ -209,18 +214,21 @@ fn model(app: &App) -> Model {
         .build()
         .unwrap();
 
+    // app.set
     let _window = app.window(window_id).unwrap();
+    _window.set_cursor_visible(false);
     // let egui = Egui::from_window(&window);
 
-    let palette = palette();
     let grid = GridInfo::new(app);
 
     Model {
         _window: window_id,
-        palette,
-        objects: new_objects(&grid, palette.len()),
+        palette: palette(),
+        objects: new_objects(&grid, PALETTE_LEN),
         grid,
-        last_anim: Duration::from_millis(0),
+        last_anim_time: 0.0,
+        last_p_swap_time: 0.0,
+        new_palette: palette(),
     }
 }
 
@@ -230,16 +238,18 @@ fn view(app: &App, model: &Model, frame: Frame) {
     // frame.clear(LIGHTYELLOW);
 
     for semi in model.objects.iter() {
-        semi.draw(&draw, &model.palette, &model.grid, app.duration.since_start);
+        semi.draw(&draw, &model.palette, &model.grid, app.time);
     }
 
     draw.to_frame(app, &frame).unwrap()
 }
 
 fn draw_palette_bg(app: &App, model: &Model, draw: &Draw) {
-    let max = 8;
+    let max = model.palette.len();
+    // let swap_time = 10.0;
+    // let offset = (app.time / swap_time).floor() as usize % max;
     let rect = app.window_rect();
-    for (i, colour) in model.palette.iter().enumerate() {
+    for i in 0..max {
         let prop = i as f32 / max as f32;
         let x_start = rect.x.lerp(prop);
         let x_end = rect.x.lerp(prop + 1.0 / max as f32);
@@ -251,36 +261,63 @@ fn draw_palette_bg(app: &App, model: &Model, draw: &Draw) {
             Vec2::new(x_end, bottom),
             Vec2::new(x_start, bottom),
         ];
-        draw.polygon().points(points).color(*colour);
+        // draw.polygon().points(points).color(model.palette[(i + 4) % max]);
+        draw.polygon().points(points).color(model.palette[i]);
     }
 }
 
-fn event(_app: &App, model: &mut Model, event: WindowEvent) {
+fn event(app: &App, model: &mut Model, event: WindowEvent) {
     match event {
         KeyReleased(key) => match key {
             VirtualKeyCode::R => model.palette = palette(),
             _ => {}
         },
+        MouseMoved(_) => {
+            if app.time > 0.2 {
+                app.quit()
+            }
+            // move moves seem to be generated on fullscreen
+        }
         _ => {}
     }
 }
 
-fn update(_app: &App, model: &mut Model, update: Update) {
+fn update(app: &App, model: &mut Model, _update: Update) {
     for object in model.objects.iter_mut() {
         if let Some((transition, start)) = &object.transition.clone() {
-            if start.abs_diff(update.since_start).as_secs_f32() > model.grid.transition_duration * 1.2 {
+            if app.time - start
+                > model.grid.transition_duration * 1.2
+            {
                 transition.finalise(object);
             }
         }
     }
 
-    if model.last_anim.abs_diff(update.since_start).as_secs_f32() > model.grid.transition_delay {
-        trigger(model, update);
-        model.last_anim = update.since_start;
+    if app.time - model.last_anim_time > model.grid.transition_delay {
+        trigger(model, app.time);
+        model.last_anim_time = app.time;
+    }
+
+    // just before swap
+    let swap_spacing = 60.0;
+    let seconds_left_until = model.last_p_swap_time + swap_spacing - app.time;
+    let swap_time = 2.0;
+    if seconds_left_until <= swap_time {
+        let f = (1.0 - seconds_left_until / swap_time) * (PALETTE_LEN as f32);
+        let u = f.floor() as usize;
+        if !(u >= PALETTE_LEN) {
+            model.palette[u] = model.new_palette[u];
+        }
+    }
+
+    if model.last_p_swap_time + swap_spacing <= app.time {
+        model.palette = model.new_palette;
+        model.new_palette = palette();
+        model.last_p_swap_time = app.time;
     }
 }
 
-fn trigger(model: &mut Model, update: Update) {
+fn trigger(model: &mut Model, time: f32) {
     let i = random_range(0, model.objects.len());
     let object = &mut model.objects[i];
 
@@ -300,28 +337,27 @@ fn trigger(model: &mut Model, update: Update) {
         let rand_dir = random_direction();
         let new_pos = object.pos + rand_dir;
         if !model.grid.contains(new_pos) {
-            return
+            return;
         }
         Transition::Translation(new_pos)
     };
 
-    object.transition = Some((transition, update.since_start));
+    object.transition = Some((transition, time));
 }
 
-
-fn palette() -> [LinSrgb; 8] {
+fn palette() -> [LinSrgb; PALETTE_LEN] {
     let h_init: f32 = random::<f32>();
-    let h_range = 1.5;
+    let h_range = 1.0;
 
     // let min_range = lerp(0.0, 0.35, random());
     // let max_range = lerp(0.65, 1.0, random());
 
     let min_range = 0.3;
-    let max_range = 0.7;
+    let max_range = 0.55;
 
-    let max = 8;
+    let max = PALETTE_LEN;
 
-    [0; 8]
+    [0; PALETTE_LEN]
         .iter()
         .enumerate()
         .map(|(i, _)| i as f32 / max as f32)
