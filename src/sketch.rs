@@ -9,6 +9,13 @@ use nannou::winit::event::VirtualKeyCode;
 use palette::{IntoColor, Okhsl};
 use rand_derive2::RandGen;
 use std::f32::consts::FRAC_PI_2;
+use web_sys::{Element, HtmlCanvasElement};
+use nannou::winit::platform::web::WindowBuilderExtWebSys;
+
+use winit::{
+    event_loop::EventLoop,
+    window::{Window, WindowAttributes}
+};
 
 const PALETTE_LEN: usize = 8;
 
@@ -259,6 +266,48 @@ async fn create_window(app: &App, width: u32, height: u32) {
         .unwrap();
 }
 
+pub async fn run_app_canvas(canvas: HtmlCanvasElement) {
+    // Since ModelFn is not a closure we need this workaround to pass the calculated model
+    thread_local!(static MODEL: RefCell<Option<Model>> = Default::default());
+
+    app::Builder::new_async(move |app| {
+        Box::new(async move {
+            create_window_canvas(app, canvas).await;
+            let model = Model::new(app);
+            MODEL.with(|m| m.borrow_mut().replace(model));
+            MODEL.with(|m| m.borrow_mut().take().unwrap())
+        })
+    })
+        .backends(Backends::PRIMARY | Backends::GL)
+        .update(update)
+        .run_async()
+        .await;
+}
+
+
+async fn create_window_canvas(app: &App, canvas: HtmlCanvasElement) {
+    let device_desc = DeviceDescriptor {
+        limits: Limits {
+            max_texture_dimension_2d: 8192,
+            ..Limits::downlevel_webgl2_defaults()
+        },
+        ..Default::default()
+    };
+
+    // let event_loop = nannou::winit::event_loop::EventLoop::new();
+    let window = nannou::winit::window::WindowBuilder::new()
+        .with_canvas(Some(canvas));
+
+    app.new_window()
+        .window(window)
+        .device_descriptor(device_desc)
+        .title("wallpaper")
+        .view(view)
+        .event(event)
+        .build_async()
+        .await
+        .unwrap();
+}
 
 fn view(app: &App, model: &Model, frame: Frame) {
     let draw = app.draw();
@@ -294,7 +343,7 @@ fn draw_palette_bg(app: &App, model: &Model, draw: &Draw) {
     }
 }
 
-fn event(app: &App, model: &mut Model, event: WindowEvent) {
+fn event(_app: &App, model: &mut Model, event: WindowEvent) {
     match event {
         KeyReleased(key) => match key {
             VirtualKeyCode::R => model.palette = palette(),
@@ -308,12 +357,6 @@ fn event(app: &App, model: &mut Model, event: WindowEvent) {
                 model.palette = palette();
             }
         }
-        // MouseMoved(_) => {
-        //     if app.time > 0.2 {
-        //         app.quit()
-        //     }
-        //     // move moves seem to be generated on fullscreen
-        // }
         _ => {}
     }
 }
@@ -333,24 +376,6 @@ fn update(app: &App, model: &mut Model, _update: Update) {
         trigger(model, app.time);
         model.last_anim_time = app.time;
     }
-
-    // // just before swap
-    // let swap_spacing = 60.0;
-    // let seconds_left_until = model.last_p_swap_time + swap_spacing - app.time;
-    // let swap_time = 2.0;
-    // if seconds_left_until <= swap_time {
-    //     let f = (1.0 - seconds_left_until / swap_time) * (PALETTE_LEN as f32);
-    //     let u = f.floor() as usize;
-    //     if !(u >= PALETTE_LEN) {
-    //         model.palette[u] = model.new_palette[u];
-    //     }
-    // }
-    //
-    // if model.last_p_swap_time + swap_spacing <= app.time {
-    //     model.palette = model.new_palette;
-    //     model.new_palette = palette();
-    //     model.last_p_swap_time = app.time;
-    // }
 }
 
 fn trigger(model: &mut Model, time: f32) {
@@ -424,10 +449,3 @@ fn hsv(h: f32, s: f32, v: f32) -> LinSrgb {
     let y: palette::LinSrgb<f32> = x.into_linear();
     LinSrgb::from_components(y.into_components())
 }
-
-// fn gui(app: &App, model: &mut Model, update: Update) {}
-
-// fn raw_window_event(_app: &App, model: &mut Model, event: &nannou::winit::event::WindowEvent) {
-//     // Let egui handle things like keyboard and mouse input.
-//     model.gui.handle_raw_event(event);
-// }

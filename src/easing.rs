@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::f32::consts::PI;
 
 pub fn ease_out_elastic(x: f32) -> f32 {

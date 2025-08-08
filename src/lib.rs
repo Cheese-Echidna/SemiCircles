@@ -2,20 +2,18 @@ mod sketch;
 mod easing;
 
 use async_std::task::block_on;
+use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
+use web_sys::{Element, HtmlCanvasElement};
 
-use sketch::{run_app};
+use crate::sketch::run_app_canvas;
 
-// web app entry_point
-#[wasm_bindgen(start)]
-pub async fn main_web() {
+#[wasm_bindgen]
+pub async fn start_with_canvas(canvas: HtmlCanvasElement, container: Element) -> Result<(), JsValue> {
     #[cfg(debug_assertions)]
     console_error_panic_hook::set_once();
 
-    println!("Rust app started");
-
-    block_on(async move {
-        run_app(1920, 1080).await;
-    });
+    // hand the canvas into your app
+    run_app_canvas(canvas, container).await;
+    Ok(())
 }
-
