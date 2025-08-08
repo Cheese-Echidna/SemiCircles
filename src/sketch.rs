@@ -293,10 +293,11 @@ async fn create_window_canvas(app: &App, canvas: HtmlCanvasElement) {
         },
         ..Default::default()
     };
+    use nannou::winit::platform::web::WindowBuilderExtWebSys;
 
-    // let event_loop = nannou::winit::event_loop::EventLoop::new();
     let window = nannou::winit::window::WindowBuilder::new()
         .with_canvas(Some(canvas));
+        // .with_append(false);
 
     app.new_window()
         .window(window)
